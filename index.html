@@ -3,181 +3,382 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Workout Planner + 1RM Visualizer</title>
+  <title>Workout Planner — Sets, 1RM, Volume</title>
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <style>
     body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: #0f172a; color: #e5e7eb; margin: 0; padding: 16px; }
-    h1 { font-size: 1.8em; margin: 8px 0 0; }
-    .muted { color: #94a3b8; }
+    h1 { font-size: 1.8em; margin: 0 0 8px; }
+    .muted { color:#94a3b8; }
     .stack { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-    th, td { padding: 10px 8px; border-bottom: 1px solid #334155; }
+    .exercise { margin-top: 16px; border: 1px solid #334155; border-radius: 8px; padding: 12px; background: #1e293b; }
+    .exercise h2 { margin: 0 0 8px; font-size: 1.2em; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    th, td { padding: 8px; border-bottom: 1px solid #334155; }
     th { text-align: left; background: #111827; color:#94a3b8; font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
     input { width: 90px; padding: 6px 8px; background: #111827; border: 1px solid #334155; color: #e5e7eb; border-radius: 8px; }
     input:focus { border-color:#60a5fa; box-shadow:0 0 0 3px rgba(96,165,250,.18); outline: none; }
     .wide { width: 220px; }
-    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #334155; background: #111827; color: #e5e7eb; cursor: pointer; font-weight:600; }
+    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #111827; color: #e5e7eb; cursor: pointer; font-weight:600; }
     button:hover { border-color: #60a5fa; }
     .danger { border-color:#7f1d1d; }
     .chart { margin-top: 24px; }
-    .footer { margin-top: 24px; color:#94a3b8; font-size:12px; }
+    .actions { white-space: nowrap; }
+    .btn-sm { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
+    .spark { margin-top:6px; }
+    .diag { display:none; font-size:12px; color:#94a3b8; margin-top:8px; }
   </style>
 </head>
 <body>
-  <h1>Workout Planner + 1RM Estimator</h1>
-  <p class="muted">Enter exercise name, weight and reps; estimates use <strong>Epley</strong>, <strong>Brzycki</strong>, and <strong>Lander</strong>. Add more rows as you plan.</p>
-
-  <div class="stack" style="margin:8px 0">
-    <button id="addRow">+ Add exercise</button>
-    <button id="clearRows" class="danger">Clear all</button>
-    <button id="exportCsv">Export CSV</button>
-    <span class="muted">Total Volume: <strong id="totalVol">0</strong></span>
+  <h1>Workout Planner</h1>
+  <div class="stack" style="margin:8px 0 12px">
+    <button id="addExercise">+ Add exercise</button>
+    <button id="undoBtn">Undo last</button>
+    <span class="muted">Total Workout Volume: <strong id="totalVol">0</strong></span>
   </div>
 
-  <table id="planner">
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Exercise</th>
-        <th>Weight</th>
-        <th>Reps</th>
-        <th>Sets</th>
-        <th>Epley 1RM</th>
-        <th>Brzycki 1RM</th>
-        <th>Lander 1RM</th>
-        <th>Volume</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <div id="exercises"></div>
 
   <div class="chart" id="chart"></div>
+  <div id="diag" class="diag"></div>
 
 <script>
+// ------- Helpers & formulas -------
+const LB_PER_KG = 2.2046226218;
+const KG_PER_LB = 1 / LB_PER_KG; // 0.45359237
+const toKg = lb => lb * KG_PER_LB;
+const toLb = kg => kg * LB_PER_KG;
+
 function epley(w, r) { return w * (1 + r / 30); }
 function brzycki(w, r) { return w * (36 / (37 - r)); }
 function lander(w, r) { return w / (1.013 - 0.0267123 * r); }
 
-const tbody = document.querySelector('#planner tbody');
-const addRowBtn = document.getElementById('addRow');
-const clearBtn = document.getElementById('clearRows');
-const exportBtn = document.getElementById('exportCsv');
-const totalVolEl = document.getElementById('totalVol');
+// ------- State & undo -------
+const exercisesDiv = document.getElementById('exercises');
 const chartDiv = d3.select('#chart');
+const undoStack = [];
+let isRestoring = false;
 
-function addRow(ex='', w='', r='', s='') {
+function readPlan(){
+  const plan = [];
+  exercisesDiv.querySelectorAll('.exercise').forEach(exDiv => {
+    const nameEl = exDiv.querySelector('h2');
+    const name = nameEl ? nameEl.textContent.trim() : '';
+    const sets = [];
+    exDiv.querySelectorAll('tbody tr').forEach(tr => {
+      const wEl = tr.querySelector('.wlb');
+      const rEl = tr.querySelector('.r');
+      const w = wEl ? parseFloat(wEl.value) || 0 : 0;
+      const r = rEl ? Math.max(1, parseInt(rEl.value) || 0) : 1;
+      sets.push({ w, r });
+    });
+    plan.push({ name, sets });
+  });
+  return plan;
+}
+
+function writePlan(plan){
+  isRestoring = true;
+  exercisesDiv.innerHTML = '';
+  (plan || []).forEach(ex => {
+    addExercise(ex.name || 'Exercise');
+    const last = exercisesDiv.lastElementChild;
+    const tbody = last.querySelector('tbody');
+    tbody.innerHTML = '';
+    (ex.sets || []).forEach(s => addSet(tbody, s.w, s.r));
+  });
+  isRestoring = false;
+  update();
+}
+
+function pushHistory(){
+  if (isRestoring) return;
+  try {
+    undoStack.push(JSON.stringify(readPlan()));
+    if (undoStack.length > 50) undoStack.shift();
+  } catch(e) { /* ignore */ }
+}
+
+function undoLast(){
+  if (!undoStack.length) return;
+  const raw = undoStack.pop();
+  try { writePlan(JSON.parse(raw)); } catch(e) { /* ignore */ }
+}
+
+document.getElementById('addExercise').addEventListener('click', () => addExercise());
+document.getElementById('undoBtn').addEventListener('click', undoLast);
+
+// ------- UI builders -------
+function addExercise(name='New Exercise') {
+  pushHistory();
+  const exDiv = document.createElement('div');
+  exDiv.className = 'exercise';
+  exDiv.innerHTML = `
+    <h2 contenteditable="true">${name}</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Set</th>
+          <th>Weight (lb)</th>
+          <th>Weight (kg)</th>
+          <th>Reps</th>
+          <th>Epley 1RM</th>
+          <th>Brzycki 1RM</th>
+          <th>Lander 1RM</th>
+          <th>Volume</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted">Exercise Volume: <strong class="exTotal">0</strong></div>
+    <div class="spark"></div>
+    <div class="stack" style="margin-top:8px">
+      <button class="addSet" type="button">Add Set</button>
+      <button class="danger removeEx" type="button">Delete Exercise</button>
+    </div>`;
+  exercisesDiv.appendChild(exDiv);
+
+  const tbody = exDiv.querySelector('tbody');
+  exDiv.querySelector('.addSet').addEventListener('click', () => addSet(tbody));
+  exDiv.querySelector('.removeEx').addEventListener('click', () => { pushHistory(); exDiv.remove(); update(); });
+  addSet(tbody);
+}
+
+function addSet(tbody, w=0, r=1) {
   const tr = document.createElement('tr');
+  const setNum = tbody.children.length + 1;
+  pushHistory();
   tr.innerHTML = `
-    <td class="idx"></td>
-    <td><input value="${ex}" class="ex wide" placeholder="e.g., Overhead Press"></td>
-    <td><input type="number" inputmode="decimal" step="0.5" value="${w}" class="w"></td>
-    <td><input type="number" step="1" value="${r}" class="r"></td>
-    <td><input type="number" step="1" value="${s}" class="s"></td>
+    <td class="setno">${setNum}</td>
+    <td><input type="number" step="0.5" value="${w}" class="wlb"></td>
+    <td><input type="number" step="0.5" value="${toKg(w).toFixed(1)}" class="wkg"></td>
+    <td><input type="number" value="${r}" class="r"></td>
     <td class="epley"></td>
     <td class="brzycki"></td>
     <td class="lander"></td>
     <td class="vol"></td>
-    <td><button class="danger del">Delete</button></td>
-  `;
+    <td class="actions">
+      <button class="btn-sm dup" type="button">+ Set</button>
+      <button class="btn-sm danger del" type="button">🗑</button>
+    </td>`;
   tbody.appendChild(tr);
-  tr.querySelectorAll('input').forEach(inp => inp.addEventListener('input', update));
-  tr.querySelector('.del').addEventListener('click', () => { tr.remove(); renumber(); update(); });
-  renumber();
+
+  // inputs
+  tr.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', update);
+    // snapshot when first focused
+    inp.addEventListener('focus', function onf(){ pushHistory(); inp.removeEventListener('focus', onf); });
+  });
+
+  // wire actions
+  wireRowActions(tr, tbody);
+
+  // lb <-> kg conversion
+  const lb = tr.querySelector('.wlb');
+  const kg = tr.querySelector('.wkg');
+  if (lb && kg){
+    lb.addEventListener('input', () => {
+      const v = parseFloat(lb.value);
+      if (!Number.isNaN(v)) kg.value = toKg(v).toFixed(1);
+      update();
+    });
+    kg.addEventListener('input', () => {
+      const v = parseFloat(kg.value);
+      if (!Number.isNaN(v)) lb.value = toLb(v).toFixed(1);
+      update();
+    });
+  }
+
   update();
 }
 
-function renumber(){
-  [...tbody.querySelectorAll('.idx')].forEach((td, i) => td.textContent = i+1);
-}
-
-function update() {
-  const data = [];
-  let totalVol = 0;
-  tbody.querySelectorAll('tr').forEach(tr => {
-    const ex = tr.querySelector('.ex').value.trim();
-    const w = parseFloat(tr.querySelector('.w').value) || 0;
-    const r = Math.max(1, parseInt(tr.querySelector('.r').value) || 0);
-    const s = Math.max(1, parseInt(tr.querySelector('.s').value) || 0);
-    const e = (w && r) ? epley(w, r) : 0;
-    const b = (w && r) ? brzycki(w, r) : 0;
-    const l = (w && r) ? lander(w, r) : 0;
-    const vol = w * r * s;
-    tr.querySelector('.epley').textContent = e ? e.toFixed(1) : '';
-    tr.querySelector('.brzycki').textContent = b ? b.toFixed(1) : '';
-    tr.querySelector('.lander').textContent = l ? l.toFixed(1) : '';
-    tr.querySelector('.vol').textContent = vol ? vol.toFixed(1) : '';
-    if (ex) data.push({exercise: ex, Epley: e, Brzycki: b, Lander: l});
-    totalVol += vol;
+function wireRowActions(tr, tbody){
+  const lb = tr.querySelector('.wlb');
+  const rInput = tr.querySelector('.r');
+  const dupBtn = tr.querySelector('.dup');
+  const delBtn = tr.querySelector('.del');
+  if (dupBtn) dupBtn.addEventListener('click', () => {
+    pushHistory();
+    const w = lb ? parseFloat(lb.value) || 0 : 0;
+    const r = rInput ? Math.max(1, parseInt(rInput.value) || 0) : 1;
+    addSet(tbody, w, r);
+    // move the new row under the current one
+    const newRow = tbody.lastElementChild;
+    tbody.insertBefore(newRow, tr.nextElementSibling);
+    update();
   });
-  totalVolEl.textContent = totalVol.toFixed(1);
-  drawChart(data);
+  if (delBtn) delBtn.addEventListener('click', () => { pushHistory(); tr.remove(); update(); });
 }
 
-function drawChart(data) {
+// ------- Update & charts -------
+function update() {
+  const points = [];
+  let totalVolume = 0;
+  exercisesDiv.querySelectorAll('.exercise').forEach(exDiv => {
+    const nameEl = exDiv.querySelector('h2');
+    const name = nameEl ? nameEl.textContent.trim() : '';
+    let exerciseVolume = 0;
+    exDiv.querySelectorAll('tbody tr').forEach((tr, i) => {
+      // set #'s
+      const no = tr.querySelector('.setno');
+      if (no) no.textContent = i+1;
+      const wEl = tr.querySelector('.wlb');
+      const rEl = tr.querySelector('.r');
+      const w = wEl ? parseFloat(wEl.value) || 0 : 0; // pounds
+      const r = rEl ? Math.max(1, parseInt(rEl.value) || 0) : 1;
+      const e = epley(w, r);
+      const b = brzycki(w, r);
+      const l = lander(w, r);
+      const vol = w * r; // pounds moved in this set
+      const eEl = tr.querySelector('.epley'); if (eEl) eEl.textContent = e ? e.toFixed(1) : '';
+      const bEl = tr.querySelector('.brzycki'); if (bEl) bEl.textContent = b ? b.toFixed(1) : '';
+      const lEl = tr.querySelector('.lander'); if (lEl) lEl.textContent = l ? l.toFixed(1) : '';
+      const vEl = tr.querySelector('.vol'); if (vEl) vEl.textContent = vol ? vol.toFixed(1) : '';
+
+      exerciseVolume += vol;
+      totalVolume += vol;
+      const label = name ? `${name} (Set ${i+1})` : `Set ${i+1}`;
+      points.push({ label, cumulative: totalVolume, added: vol });
+    });
+    const exT = exDiv.querySelector('.exTotal');
+    if (exT) exT.textContent = exerciseVolume.toFixed(1);
+    drawSpark(exDiv);
+  });
+  const tv = document.getElementById('totalVol');
+  if (tv) tv.textContent = totalVolume.toFixed(1);
+  drawRolling(points);
+}
+
+function drawRolling(points) {
   chartDiv.selectAll('*').remove();
-  if (!data.length) return;
+  if (!points.length) return;
 
   const width = Math.min(900, window.innerWidth - 32);
   const height = 420;
-  const margin = {top: 20, right: 24, bottom: 56, left: 56};
+  const margin = {top: 20, right: 24, bottom: 72, left: 64};
   const svg = chartDiv.append('svg').attr('width', width).attr('height', height);
-  const x0 = d3.scaleBand().domain(data.map(d => d.exercise)).range([margin.left, width - margin.right]).paddingInner(0.2);
-  const keys = ['Epley', 'Brzycki', 'Lander'];
-  const x1 = d3.scaleBand().domain(keys).range([0, x0.bandwidth()]).padding(0.08);
-  const y = d3.scaleLinear().domain([0, d3.max(data, d => Math.max(d.Epley, d.Brzycki, d.Lander)) * 1.1]).nice().range([height - margin.bottom, margin.top]);
-  const color = d3.scaleOrdinal().domain(keys).range(['#60a5fa', '#34d399', '#f59e0b']);
 
-  svg.append('g').selectAll('g').data(data).join('g')
-    .attr('transform', d => `translate(${x0(d.exercise)},0)`) 
-    .selectAll('rect')
-    .data(d => keys.map(key => ({key, value: d[key]})))
-    .join('rect')
-    .attr('x', d => x1(d.key))
-    .attr('y', d => y(d.value))
-    .attr('width', x1.bandwidth())
-    .attr('height', d => y(0) - y(d.value))
-    .attr('fill', d => color(d.key));
+  const x = d3.scalePoint()
+    .domain(points.map(d => d.label))
+    .range([margin.left, width - margin.right])
+    .padding(0.5);
 
-  svg.append('g').attr('transform', `translate(0,${height - margin.bottom})`).call(d3.axisBottom(x0)).selectAll('text').attr('transform','rotate(-24)').style('text-anchor','end');
-  svg.append('g').attr('transform', `translate(${margin.left},0)`).call(d3.axisLeft(y));
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(points, d => d.cumulative) * 1.1]).nice()
+    .range([height - margin.bottom, margin.top]);
 
-  const legend = svg.append('g').attr('transform', `translate(${width - margin.right - 180}, ${margin.top})`);
-  ['#60a5fa','#34d399','#f59e0b'].forEach((c,i)=>{
-    const g = legend.append('g').attr('transform',`translate(0,${i*18})`);
-    g.append('rect').attr('width',12).attr('height',12).attr('fill',c).attr('rx',2);
-    g.append('text').attr('x',18).attr('y',10).text(keys[i]).attr('fill','#e5e7eb').attr('font-size',12);
-  });
+  // gridlines
+  svg.append('g')
+    .attr('stroke', '#334155')
+    .attr('stroke-opacity', 0.5)
+    .selectAll('line')
+    .data(y.ticks())
+    .join('line')
+    .attr('x1', margin.left)
+    .attr('x2', width - margin.right)
+    .attr('y1', d => y(d))
+    .attr('y2', d => y(d));
+
+  // line
+  const line = d3.line()
+    .x(d => x(d.label))
+    .y(d => y(d.cumulative))
+    .curve(d3.curveMonotoneX);
+
+  svg.append('path')
+    .attr('fill', 'none')
+    .attr('stroke', '#60a5fa')
+    .attr('stroke-width', 2.5)
+    .attr('d', line(points));
+
+  // points and value labels
+  const fmt = d3.format('.0f');
+  svg.append('g')
+    .selectAll('circle')
+    .data(points)
+    .join('circle')
+    .attr('cx', d => x(d.label))
+    .attr('cy', d => y(d.cumulative))
+    .attr('r', 3.5)
+    .attr('fill', '#60a5fa');
+
+  svg.append('g')
+    .selectAll('text.pt')
+    .data(points)
+    .join('text')
+    .attr('class', 'pt')
+    .attr('x', d => x(d.label))
+    .attr('y', d => y(d.cumulative) - 8)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', 11)
+    .attr('fill', '#e5e7eb')
+    .text(d => fmt(d.cumulative));
+
+  // axes
+  svg.append('g')
+    .attr('transform', `translate(0,${height - margin.bottom})`)
+    .call(d3.axisBottom(x))
+    .selectAll('text')
+    .attr('transform','rotate(-32)')
+    .style('text-anchor','end');
+
+  svg.append('g')
+    .attr('transform', `translate(${margin.left},0)`) 
+    .call(d3.axisLeft(y))
+    .append('text')
+    .attr('x', -margin.left + 8)
+    .attr('y', margin.top - 8)
+    .attr('fill', '#e5e7eb')
+    .attr('font-size', 12)
+    .text('Rolling total (lb)');
 }
 
-function exportCsv(){
-  const rows = [['Exercise','Weight','Reps','Sets','Epley 1RM','Brzycki 1RM','Lander 1RM','Volume']];
-  tbody.querySelectorAll('tr').forEach(tr => {
-    const ex = tr.querySelector('.ex').value;
-    const w = tr.querySelector('.w').value;
-    const r = tr.querySelector('.r').value;
-    const s = tr.querySelector('.s').value;
-    const e = tr.querySelector('.epley').textContent;
-    const b = tr.querySelector('.brzycki').textContent;
-    const l = tr.querySelector('.lander').textContent;
-    const v = tr.querySelector('.vol').textContent;
-    rows.push([ex,w,r,s,e,b,l,v]);
+function drawSpark(exDiv){
+  const host = d3.select(exDiv).select('.spark');
+  host.selectAll('*').remove();
+  const rows = exDiv.querySelectorAll('tbody tr');
+  if(!rows.length) return;
+  const pts=[]; let cum=0;
+  rows.forEach(tr=>{
+    const wEl = tr.querySelector('.wlb');
+    const rEl = tr.querySelector('.r');
+    const w = wEl ? parseFloat(wEl.value) || 0 : 0;
+    const r = rEl ? Math.max(1, parseInt(rEl.value) || 0) : 1;
+    cum += w*r;
+    pts.push(cum);
   });
-  const csv = rows.map(r => r.join(',')).join('\n');
-  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'workout_plan.csv'; a.click();
+  const w = 240, h = 60, m = {top:4,right:6,bottom:4,left:6};
+  const svg = host.append('svg').attr('width', w).attr('height', h);
+  const x = d3.scaleLinear().domain([1, pts.length]).range([m.left, w - m.right]);
+  const y = d3.scaleLinear().domain([0, d3.max(pts)]).nice().range([h - m.bottom, m.top]);
+  const line = d3.line().x((d,i)=>x(i+1)).y(d=>y(d)).curve(d3.curveMonotoneX);
+  svg.append('path').attr('fill','none').attr('stroke','#34d399').attr('stroke-width',2).attr('d', line(pts));
 }
 
-addRowBtn.addEventListener('click', () => addRow());
-clearBtn.addEventListener('click', () => { tbody.innerHTML = ''; renumber(); update(); });
-exportBtn.addEventListener('click', exportCsv);
-window.addEventListener('resize', update);
+// ------- Diagnostics (simple tests) -------
+(function selfTest(){
+  try {
+    const almostEq = (a,b,eps=1e-6) => Math.abs(a-b) < eps;
+    console.assert(almostEq(toLb(100*KG_PER_LB), 100), 'toLb ∘ toKg roundtrip failed');
+    console.assert(almostEq(toKg(100*LB_PER_KG), 100), 'toKg ∘ toLb roundtrip failed');
+    // sample: 225 x 10 → Epley=300, Brzycki=300, Lander≈301.8
+    const w=225, r=10;
+    console.assert(almostEq(epley(w,r), 300), 'Epley check failed');
+    console.assert(almostEq(brzycki(w,r), 300), 'Brzycki check failed');
+    const l = lander(w,r);
+    console.assert(l > 301 && l < 302.5, 'Lander range check failed');
+    document.getElementById('diag').textContent = 'Diagnostics passed';
+  } catch(e) {
+    const d = document.getElementById('diag');
+    d.style.display='block';
+    d.textContent = 'Diagnostics error: ' + e.message;
+  }
+})();
 
-// Seed a couple example rows
-addRow('Overhead Press (Barbell)', 135, 5, 3);
-addRow('Lat Pulldown', 160, 10, 3);
+// seed example
+addExercise('Bench Press');
+
 </script>
 </body>
 </html>
+
