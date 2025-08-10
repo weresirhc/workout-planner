@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Workout Planner — Sets, 1RM, Volume</title>
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: #0f172a; color: #e5e7eb; margin: 0; padding: 16px; }
     h1 { font-size: 1.8em; margin: 0 0 8px; }
@@ -17,10 +18,6 @@
     th { text-align: left; background: #111827; color:#94a3b8; font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
     input { width: 90px; padding: 6px 8px; background: #111827; border: 1px solid #334155; color: #e5e7eb; border-radius: 8px; }
     input:focus { border-color:#60a5fa; box-shadow:0 0 0 3px rgba(96,165,250,.18); outline: none; }
-    .wide { width: 220px; }
-    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #111827; color: #e5e7eb; cursor: pointer; font-weight:600; }
-    button:hover { border-color: #60a5fa; }
-    .danger { border-color:#7f1d1d; }
     .chart { margin-top: 24px; }
     .actions { white-space: nowrap; }
     .btn-sm { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
@@ -35,7 +32,7 @@
     .fab { width: 56px; height: 56px; border-radius: 9999px; border: none; background: #2563eb; color: #fff; font-weight: 800; font-size: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.35); cursor: pointer; }
     .fab.secondary { background: #10b981; }
     .fab:active { transform: translateY(1px); }
-    /* Modal for CSV load options */
+    /* Modal for CSV/XLSX load options */
     .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 100; }
     .modal.show { display: flex; }
     .modal .panel { background: #111827; border: 1px solid #334155; border-radius: 12px; width: min(92vw, 420px); padding: 16px; }
@@ -50,7 +47,7 @@
     <button id="addExercise">+ Add exercise</button>
     <button id="undoBtn">Undo last</button>
     <button id="saveCsv">Save CSV</button>
-    <button id="loadCsv">Load CSV</button>
+    <button id="loadCsv">Load CSV/XLSX</button>
     <span class="muted">Total Workout Volume: <strong id="totalVol">0</strong></span>
   </div>
 
@@ -59,12 +56,12 @@
   <div class="chart" id="chart"></div>
   <div id="diag" class="diag"></div>
 
-  <!-- Hidden input + modal for CSV load options -->
-  <input id="loadCsvInput" type="file" accept=".csv,text/csv" style="display:none" />
+  <!-- Hidden input + modal for load options -->
+  <input id="loadFileInput" type="file" accept=".csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" style="display:none" />
   <div id="loadModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="loadTitle">
     <div class="panel">
-      <h3 id="loadTitle">Open CSV</h3>
-      <p>Choose where to open your saved CSV.</p>
+      <h3 id="loadTitle">Open File</h3>
+      <p>Choose where to open your saved data.</p>
       <div class="actions-row">
         <button id="importHereBtn">Import here</button>
         <button id="openSheetsBtn">Open in Google Sheets</button>
@@ -80,7 +77,7 @@
   </div>
 
 <script>
-// ------- Helpers & formulas -------
+// ================= Helpers & formulas =================
 const LB_PER_KG = 2.2046226218;
 const KG_PER_LB = 1 / LB_PER_KG; // 0.45359237
 const toKg = lb => lb * KG_PER_LB;
@@ -90,7 +87,7 @@ function epley(w, r) { return w * (1 + r / 30); }
 function brzycki(w, r) { return w * (36 / (37 - r)); }
 function lander(w, r) { return w / (1.013 - 0.0267123 * r); }
 
-// ------- State & undo -------
+// ================= State & undo =================
 const exercisesDiv = document.getElementById('exercises');
 const chartDiv = d3.select('#chart');
 const undoStack = [];
@@ -142,10 +139,13 @@ function undoLast(){
   try { writePlan(JSON.parse(raw)); } catch(e) { /* ignore */ }
 }
 
-document.getElementById('addExercise').addEventListener('click', () => addExercise());
-document.getElementById('undoBtn').addEventListener('click', undoLast);
+// Top controls
+const addExBtn = document.getElementById('addExercise');
+const undoBtn = document.getElementById('undoBtn');
+addExBtn.addEventListener('click', () => addExercise());
+undoBtn.addEventListener('click', undoLast);
 
-// Floating action buttons logic
+// Floating action buttons
 function quickAddExercise(){ addExercise(); }
 function quickAddSet(){
   let last = exercisesDiv.querySelector('.exercise:last-of-type');
@@ -160,11 +160,11 @@ function quickAddSet(){
   }
 }
 const fabEx = document.getElementById('fabAddExercise');
-if (fabEx) fabEx.addEventListener('click', quickAddExercise);
 const fabSet = document.getElementById('fabAddSet');
-if (fabSet) fabSet.addEventListener('click', quickAddSet);
+fabEx.addEventListener('click', quickAddExercise);
+fabSet.addEventListener('click', quickAddSet);
 
-// ------- UI builders -------
+// ================= UI builders =================
 function addExercise(name='New Exercise') {
   pushHistory();
   const exDiv = document.createElement('div');
@@ -281,7 +281,7 @@ function wireRowActions(tr, tbody){
   if (delBtn) delBtn.addEventListener('click', () => { pushHistory(); tr.remove(); update(); });
 }
 
-// ------- Update & charts -------
+// ================= Update & charts =================
 function update() {
   const points = [];
   let totalVolume = 0;
@@ -426,10 +426,10 @@ function drawSpark(exDiv){
   svg.append('path').attr('fill','none').attr('stroke','#34d399').attr('stroke-width',2).attr('d', line(pts));
 }
 
-// ------- CSV Save/Load for Google Sheets -------
+// ================= CSV/XLSX Save/Load =================
 const saveBtn = document.getElementById('saveCsv');
 const loadBtn = document.getElementById('loadCsv');
-const loadInput = document.getElementById('loadCsvInput');
+const loadInput = document.getElementById('loadFileInput');
 const loadModal = document.getElementById('loadModal');
 const importHereBtn = document.getElementById('importHereBtn');
 const openSheetsBtn = document.getElementById('openSheetsBtn');
@@ -443,19 +443,59 @@ function csvEscape(val){
   return s;
 }
 
-function buildCsv(){
-  const lines = [];
+function planToAOA(){
+  const rows = [[
+    'Date','Exercise','Set','Weight_lb','Weight_kg','Reps','Epley_1RM','Brzycki_1RM','Lander_1RM','Set_Volume_lb','Exercise_Total_Volume_lb','Workout_Rolling_lb'
+  ]];
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth()+1).padStart(2,'0');
   const dd = String(today.getDate()).padStart(2,'0');
   const date = `${yyyy}-${mm}-${dd}`;
-  const header = [
-    'Date','Exercise','Set','Weight_lb','Weight_kg','Reps','Epley_1RM','Brzycki_1RM','Lander_1RM','Set_Volume_lb','Exercise_Total_Volume_lb','Workout_Rolling_lb'
-  ];
-  lines.push(header.join(','));
-
   let workoutRolling = 0;
+  exercisesDiv.querySelectorAll('.exercise').forEach(exDiv => {
+    const name = exDiv.querySelector('h2')?.textContent.trim() || '';
+    let exerciseTotal = 0;
+    exDiv.querySelectorAll('tbody tr').forEach((tr, i) => {
+      const wlb = parseFloat(tr.querySelector('.wlb')?.value) || 0;
+      const wkg = toKg(wlb);
+      const reps = Math.max(1, parseInt(tr.querySelector('.r')?.value) || 0);
+      const e = epley(wlb, reps);
+      const b = brzycki(wlb, reps);
+      const l = lander(wlb, reps);
+      const setVol = wlb * reps;
+      exerciseTotal += setVol;
+      workoutRolling += setVol;
+      rows.push([
+        date, name, i+1,
+        Number(wlb.toFixed(1)), Number(wkg.toFixed(1)), reps,
+        Number(e.toFixed(1)), Number(b.toFixed(1)), Number(l.toFixed(1)),
+        Number(setVol.toFixed(1)), Number(exerciseTotal.toFixed(1)), Number(workoutRolling.toFixed(1))
+      ]);
+    });
+  });
+  return { rows, filename: `workout_${date}.xlsx` };
+}
+
+function buildXlsxFromPlan(){
+  const { rows, filename } = planToAOA();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Workout');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const file = new File([buf], filename, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  return { file };
+}
+
+function buildCsv(){
+  const header = 'Date,Exercise,Set,Weight_lb,Weight_kg,Reps,Epley_1RM,Brzycki_1RM,Lander_1RM,Set_Volume_lb,Exercise_Total_Volume_lb,Workout_Rolling_lb';
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth()+1).padStart(2,'0');
+  const dd = String(today.getDate()).padStart(2,'0');
+  const date = `${yyyy}-${mm}-${dd}`;
+  let workoutRolling = 0;
+  const lines = [header];
   exercisesDiv.querySelectorAll('.exercise').forEach(exDiv => {
     const name = exDiv.querySelector('h2')?.textContent.trim() || '';
     let exerciseTotal = 0;
@@ -482,8 +522,8 @@ function buildCsv(){
         setVol.toFixed(1),
         exerciseTotal.toFixed(1),
         workoutRolling.toFixed(1)
-      ];
-      lines.push(row.join(','));
+      ].join(',');
+      lines.push(row);
     });
   });
   const csv = lines.join('\r\n');
@@ -491,12 +531,16 @@ function buildCsv(){
   return { csv, filename };
 }
 
-function downloadCsv(filename, csvOrBlob){
-  const blob = csvOrBlob instanceof Blob ? csvOrBlob : new Blob([csvOrBlob], { type: 'text/csv;charset=utf-8;' });
+function downloadBlob(filename, blob){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function downloadCsv(filename, csvOrBlob){
+  const blob = csvOrBlob instanceof Blob ? csvOrBlob : new Blob([csvOrBlob], { type: 'text/csv;charset=utf-8;' });
+  downloadBlob(filename, blob);
 }
 
 async function shareCsv(filename, csvText){
@@ -527,7 +571,6 @@ function parseCsv(text){
   if (!lines.length) return [];
   const head = splitCSV(lines[0]).map(norm);
   const idx = (name) => head.indexOf(name);
-  // support either our header or close variants
   const iExercise = idx('exercise');
   const iSet = idx('set');
   let iWlb = idx('weight_lb'); if (iWlb<0) iWlb = head.findIndex(h=>/weight.*lb/.test(h));
@@ -558,60 +601,94 @@ function parseCsv(text){
 function showModal(){ loadModal.classList.add('show'); }
 function hideModal(){ loadModal.classList.remove('show'); pendingCsvFile=null; pendingCsvText=''; }
 
-if (saveBtn) saveBtn.addEventListener('click', async () => {
+// Save/Load events
+saveBtn.addEventListener('click', async () => {
   const { csv, filename } = buildCsv();
   await shareCsv(filename, csv); // fallback downloads if share unsupported
 });
 
-if (loadBtn) loadBtn.addEventListener('click', () => { if (loadInput) loadInput.click(); });
+loadBtn.addEventListener('click', () => { loadInput && loadInput.click(); });
 
-if (loadInput) loadInput.addEventListener('change', async (e) => {
+loadInput.addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
   pendingCsvFile = file;
-  pendingCsvText = await file.text();
+  try {
+    if (/\.xlsx$/i.test(file.name) || /sheet/.test(file.type)) {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const first = wb.SheetNames[0];
+      pendingCsvText = XLSX.utils.sheet_to_csv(wb.Sheets[first]);
+    } else {
+      pendingCsvText = await file.text();
+    }
+  } catch(err){
+    try { pendingCsvText = await file.text(); } catch(_) { pendingCsvText = ''; }
+  }
   showModal();
 });
 
-if (cancelLoadBtn) cancelLoadBtn.addEventListener('click', hideModal);
+cancelLoadBtn.addEventListener('click', hideModal);
 
-if (importHereBtn) importHereBtn.addEventListener('click', () => {
-  try { const plan = parseCsv(pendingCsvText); writePlan(plan); } catch(e) { alert('Could not import CSV'); }
+importHereBtn.addEventListener('click', () => {
+  try { const plan = parseCsv(pendingCsvText); writePlan(plan); } catch(e) { alert('Could not import file'); }
   hideModal();
 });
 
-if (openSheetsBtn) openSheetsBtn.addEventListener('click', async () => {
+openSheetsBtn.addEventListener('click', async () => {
   try {
-    // share original file if possible, else recreate from text
-    let file = pendingCsvFile || new File([pendingCsvText], 'workout.csv', { type: 'text/csv' });
+    // Prefer XLSX when opening in Google Sheets on iOS
+    let fileName = 'workout.xlsx';
+    let file;
+    if (pendingCsvText) {
+      try {
+        const wbFromCsv = XLSX.read(pendingCsvText, { type: 'string' });
+        const xbuf = XLSX.write(wbFromCsv, { bookType: 'xlsx', type: 'array' });
+        file = new File([xbuf], fileName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      } catch(e) {
+        const built = buildXlsxFromPlan();
+        file = built.file; fileName = built.file.name || fileName;
+      }
+    } else {
+      const built = buildXlsxFromPlan();
+      file = built.file; fileName = built.file.name || fileName;
+    }
+
     if (navigator.canShare && navigator.canShare({ files: [file] })){
       await navigator.share({ files: [file], title: 'Open in Google Sheets' });
     } else {
-      // fallback: download, user can open with Sheets app from Files/Downloads
-      downloadCsv(file.name || 'workout.csv', pendingCsvText);
-      alert('Sharing not supported here. CSV downloaded — open it with the Google Sheets app.');
+      downloadBlob(fileName, file);
+      alert('Sharing not supported here. XLSX downloaded — open it with the Google Sheets app.');
     }
   } catch(e) {
-    downloadCsv('workout.csv', pendingCsvText);
+    const built = buildXlsxFromPlan();
+    downloadBlob(built.file.name, built.file);
   }
   hideModal();
 });
 
-// ------- Diagnostics (simple tests) -------
+// ================= Diagnostics (tests) =================
 (function selfTest(){
   try {
     const almostEq = (a,b,eps=1e-6) => Math.abs(a-b) < eps;
+    // unit conversions
     console.assert(almostEq(toLb(100*KG_PER_LB), 100), 'toLb ∘ toKg roundtrip failed');
     console.assert(almostEq(toKg(100*LB_PER_KG), 100), 'toKg ∘ toLb roundtrip failed');
-    // sample: 225 x 10 → Epley=300, Brzycki=300, Lander≈301.8
+    // formulas (225x10)
     const w=225, r=10;
     console.assert(almostEq(epley(w,r), 300), 'Epley check failed');
     console.assert(almostEq(brzycki(w,r), 300), 'Brzycki check failed');
-    const l = lander(w,r);
-    console.assert(l > 301 && l < 302.5, 'Lander range check failed');
-    // CSV header presence
-    const { csv } = (function(){ const {csv} = { csv: 'Date,Exercise,Set,Weight_lb,Weight_kg,Reps,Epley_1RM,Brzycki_1RM,Lander_1RM,Set_Volume_lb,Exercise_Total_Volume_lb,Workout_Rolling_lb'}; return { csv }; })();
-    console.assert(csv.startsWith('Date,Exercise,Set'), 'CSV header check failed');
+    const l = lander(w,r); console.assert(l > 301 && l < 302.5, 'Lander range failed');
+    // CSV header & builder
+    const built = buildCsv();
+    console.assert(built.csv.startsWith('Date,Exercise,Set'), 'CSV header check failed');
+    // splitCSV edge cases
+    const row = '"Incline, DB",2,100,45,8';
+    const cols = splitCSV(row);
+    console.assert(cols[0] === '"Incline, DB"', 'splitCSV quoted comma failed');
+    const row2 = '"He said ""go""",1,95,43,5';
+    const cols2 = splitCSV(row2);
+    console.assert(cols2[0] === '"He said ""go"""', 'splitCSV double quotes failed');
     document.getElementById('diag').textContent = 'Diagnostics passed';
   } catch(e) {
     const d = document.getElementById('diag');
@@ -626,6 +703,7 @@ addExercise('Bench Press');
 </script>
 </body>
 </html>
+
 
 
 
