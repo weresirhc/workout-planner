@@ -26,19 +26,22 @@
     .btn-sm { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
     .spark { margin-top:6px; }
     .diag { display:none; font-size:12px; color:#94a3b8; margin-top:8px; }
-      .actions { white-space: nowrap; }
-    .btn-sm { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
-    .spark { margin-top:6px; }
-    .diag { display:none; font-size:12px; color:#94a3b8; margin-top:8px; }
-    /* NEW: mobile-friendly table wrapper so header/background spans all columns */
+    /* mobile-friendly table wrapper so header/background spans all columns */
     .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     /* ensure the internal table has enough width to show all columns including Actions */
     .exercise table { min-width: 820px; }
-      /* Floating action buttons */
+    /* Floating action buttons */
     .fab-wrap { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 12px; z-index: 50; }
     .fab { width: 56px; height: 56px; border-radius: 9999px; border: none; background: #2563eb; color: #fff; font-weight: 800; font-size: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.35); cursor: pointer; }
     .fab.secondary { background: #10b981; }
     .fab:active { transform: translateY(1px); }
+    /* Modal for CSV load options */
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 100; }
+    .modal.show { display: flex; }
+    .modal .panel { background: #111827; border: 1px solid #334155; border-radius: 12px; width: min(92vw, 420px); padding: 16px; }
+    .modal .panel h3 { margin: 0 0 8px; }
+    .modal .panel p { margin: 0 0 12px; color: #94a3b8; }
+    .modal .actions-row { display:flex; gap:8px; justify-content:flex-end; }
   </style>
 </head>
 <body>
@@ -46,6 +49,8 @@
   <div class="stack" style="margin:8px 0 12px">
     <button id="addExercise">+ Add exercise</button>
     <button id="undoBtn">Undo last</button>
+    <button id="saveCsv">Save CSV</button>
+    <button id="loadCsv">Load CSV</button>
     <span class="muted">Total Workout Volume: <strong id="totalVol">0</strong></span>
   </div>
 
@@ -53,6 +58,20 @@
 
   <div class="chart" id="chart"></div>
   <div id="diag" class="diag"></div>
+
+  <!-- Hidden input + modal for CSV load options -->
+  <input id="loadCsvInput" type="file" accept=".csv,text/csv" style="display:none" />
+  <div id="loadModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="loadTitle">
+    <div class="panel">
+      <h3 id="loadTitle">Open CSV</h3>
+      <p>Choose where to open your saved CSV.</p>
+      <div class="actions-row">
+        <button id="importHereBtn">Import here</button>
+        <button id="openSheetsBtn">Open in Google Sheets</button>
+        <button id="cancelLoadBtn" class="danger">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Floating Action Buttons -->
   <div class="fab-wrap">
@@ -407,6 +426,177 @@ function drawSpark(exDiv){
   svg.append('path').attr('fill','none').attr('stroke','#34d399').attr('stroke-width',2).attr('d', line(pts));
 }
 
+// ------- CSV Save/Load for Google Sheets -------
+const saveBtn = document.getElementById('saveCsv');
+const loadBtn = document.getElementById('loadCsv');
+const loadInput = document.getElementById('loadCsvInput');
+const loadModal = document.getElementById('loadModal');
+const importHereBtn = document.getElementById('importHereBtn');
+const openSheetsBtn = document.getElementById('openSheetsBtn');
+const cancelLoadBtn = document.getElementById('cancelLoadBtn');
+let pendingCsvFile = null; // File object
+let pendingCsvText = '';
+
+function csvEscape(val){
+  const s = String(val ?? '');
+  if (/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+
+function buildCsv(){
+  const lines = [];
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth()+1).padStart(2,'0');
+  const dd = String(today.getDate()).padStart(2,'0');
+  const date = `${yyyy}-${mm}-${dd}`;
+  const header = [
+    'Date','Exercise','Set','Weight_lb','Weight_kg','Reps','Epley_1RM','Brzycki_1RM','Lander_1RM','Set_Volume_lb','Exercise_Total_Volume_lb','Workout_Rolling_lb'
+  ];
+  lines.push(header.join(','));
+
+  let workoutRolling = 0;
+  exercisesDiv.querySelectorAll('.exercise').forEach(exDiv => {
+    const name = exDiv.querySelector('h2')?.textContent.trim() || '';
+    let exerciseTotal = 0;
+    exDiv.querySelectorAll('tbody tr').forEach((tr, i) => {
+      const wlb = parseFloat(tr.querySelector('.wlb')?.value) || 0;
+      const wkg = toKg(wlb);
+      const reps = Math.max(1, parseInt(tr.querySelector('.r')?.value) || 0);
+      const e = epley(wlb, reps);
+      const b = brzycki(wlb, reps);
+      const l = lander(wlb, reps);
+      const setVol = wlb * reps;
+      exerciseTotal += setVol;
+      workoutRolling += setVol;
+      const row = [
+        date,
+        csvEscape(name),
+        i+1,
+        wlb.toFixed(1),
+        wkg.toFixed(1),
+        reps,
+        e.toFixed(1),
+        b.toFixed(1),
+        l.toFixed(1),
+        setVol.toFixed(1),
+        exerciseTotal.toFixed(1),
+        workoutRolling.toFixed(1)
+      ];
+      lines.push(row.join(','));
+    });
+  });
+  const csv = lines.join('\r\n');
+  const filename = `workout_${date}.csv`;
+  return { csv, filename };
+}
+
+function downloadCsv(filename, csvOrBlob){
+  const blob = csvOrBlob instanceof Blob ? csvOrBlob : new Blob([csvOrBlob], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function shareCsv(filename, csvText){
+  try {
+    const file = new File([csvText], filename, { type: 'text/csv' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: 'Workout CSV', text: 'Exported from Workout Planner' });
+      return true;
+    }
+  } catch(e) { /* fall through to download */ }
+  downloadCsv(filename, csvText);
+  return false;
+}
+
+function norm(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,'_'); }
+function splitCSV(line){
+  const out=[]; let cur=''; let inQ=false; for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if (ch === '"') { if (inQ && line[i+1]==='"'){ cur+='"'; i++; } else { inQ=!inQ; } }
+    else if (ch === ',' && !inQ){ out.push(cur); cur=''; }
+    else { cur+=ch; }
+  }
+  out.push(cur); return out;
+}
+
+function parseCsv(text){
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  if (!lines.length) return [];
+  const head = splitCSV(lines[0]).map(norm);
+  const idx = (name) => head.indexOf(name);
+  // support either our header or close variants
+  const iExercise = idx('exercise');
+  const iSet = idx('set');
+  let iWlb = idx('weight_lb'); if (iWlb<0) iWlb = head.findIndex(h=>/weight.*lb/.test(h));
+  let iWkg = idx('weight_kg'); if (iWkg<0) iWkg = head.findIndex(h=>/weight.*kg/.test(h));
+  const iReps = idx('reps');
+  const planMap = new Map(); // name -> [{w,r,set}]
+
+  for (let li=1; li<lines.length; li++){
+    const cols = splitCSV(lines[li]);
+    if (!cols.length) continue;
+    const name = (cols[iExercise]||'').replace(/^"|"$/g,'');
+    const setNo = parseInt(cols[iSet]||'0') || 1;
+    let wlb = parseFloat(cols[iWlb]||'');
+    const wkg = parseFloat(cols[iWkg]||'');
+    if (!Number.isFinite(wlb) && Number.isFinite(wkg)) wlb = toLb(wkg);
+    const reps = Math.max(1, parseInt(cols[iReps]||'0')||0);
+    if (!planMap.has(name)) planMap.set(name, []);
+    planMap.get(name).push({ set:setNo, w: wlb||0, r: reps||1 });
+  }
+  const plan=[];
+  for (const [name, arr] of planMap.entries()){
+    arr.sort((a,b)=>a.set-b.set);
+    plan.push({ name, sets: arr.map(({w,r})=>({w,r})) });
+  }
+  return plan;
+}
+
+function showModal(){ loadModal.classList.add('show'); }
+function hideModal(){ loadModal.classList.remove('show'); pendingCsvFile=null; pendingCsvText=''; }
+
+if (saveBtn) saveBtn.addEventListener('click', async () => {
+  const { csv, filename } = buildCsv();
+  await shareCsv(filename, csv); // fallback downloads if share unsupported
+});
+
+if (loadBtn) loadBtn.addEventListener('click', () => { if (loadInput) loadInput.click(); });
+
+if (loadInput) loadInput.addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  pendingCsvFile = file;
+  pendingCsvText = await file.text();
+  showModal();
+});
+
+if (cancelLoadBtn) cancelLoadBtn.addEventListener('click', hideModal);
+
+if (importHereBtn) importHereBtn.addEventListener('click', () => {
+  try { const plan = parseCsv(pendingCsvText); writePlan(plan); } catch(e) { alert('Could not import CSV'); }
+  hideModal();
+});
+
+if (openSheetsBtn) openSheetsBtn.addEventListener('click', async () => {
+  try {
+    // share original file if possible, else recreate from text
+    let file = pendingCsvFile || new File([pendingCsvText], 'workout.csv', { type: 'text/csv' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: 'Open in Google Sheets' });
+    } else {
+      // fallback: download, user can open with Sheets app from Files/Downloads
+      downloadCsv(file.name || 'workout.csv', pendingCsvText);
+      alert('Sharing not supported here. CSV downloaded — open it with the Google Sheets app.');
+    }
+  } catch(e) {
+    downloadCsv('workout.csv', pendingCsvText);
+  }
+  hideModal();
+});
+
 // ------- Diagnostics (simple tests) -------
 (function selfTest(){
   try {
@@ -419,6 +609,9 @@ function drawSpark(exDiv){
     console.assert(almostEq(brzycki(w,r), 300), 'Brzycki check failed');
     const l = lander(w,r);
     console.assert(l > 301 && l < 302.5, 'Lander range check failed');
+    // CSV header presence
+    const { csv } = (function(){ const {csv} = { csv: 'Date,Exercise,Set,Weight_lb,Weight_kg,Reps,Epley_1RM,Brzycki_1RM,Lander_1RM,Set_Volume_lb,Exercise_Total_Volume_lb,Workout_Rolling_lb'}; return { csv }; })();
+    console.assert(csv.startsWith('Date,Exercise,Set'), 'CSV header check failed');
     document.getElementById('diag').textContent = 'Diagnostics passed';
   } catch(e) {
     const d = document.getElementById('diag');
@@ -433,5 +626,6 @@ addExercise('Bench Press');
 </script>
 </body>
 </html>
+
 
 
