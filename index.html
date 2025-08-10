@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Workout Planner + 1RM Visualizer</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: #0f172a; color: #e5e7eb; margin: 0; padding: 16px; }
+    h1 { font-size: 1.8em; margin: 8px 0 0; }
+    .muted { color: #94a3b8; }
+    .stack { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #334155; }
+    th { text-align: left; background: #111827; color:#94a3b8; font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
+    input { width: 90px; padding: 6px 8px; background: #111827; border: 1px solid #334155; color: #e5e7eb; border-radius: 8px; }
+    input:focus { border-color:#60a5fa; box-shadow:0 0 0 3px rgba(96,165,250,.18); outline: none; }
+    .wide { width: 220px; }
+    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #334155; background: #111827; color: #e5e7eb; cursor: pointer; font-weight:600; }
+    button:hover { border-color: #60a5fa; }
+    .danger { border-color:#7f1d1d; }
+    .chart { margin-top: 24px; }
+    .footer { margin-top: 24px; color:#94a3b8; font-size:12px; }
+  </style>
+</head>
+<body>
+  <h1>Workout Planner + 1RM Estimator</h1>
+  <p class="muted">Enter exercise name, weight and reps; estimates use <strong>Epley</strong>, <strong>Brzycki</strong>, and <strong>Lander</strong>. Add more rows as you plan.</p>
+
+  <div class="stack" style="margin:8px 0">
+    <button id="addRow">+ Add exercise</button>
+    <button id="clearRows" class="danger">Clear all</button>
+    <button id="exportCsv">Export CSV</button>
+    <span class="muted">Total Volume: <strong id="totalVol">0</strong></span>
+  </div>
+
+  <table id="planner">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Exercise</th>
+        <th>Weight</th>
+        <th>Reps</th>
+        <th>Sets</th>
+        <th>Epley 1RM</th>
+        <th>Brzycki 1RM</th>
+        <th>Lander 1RM</th>
+        <th>Volume</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div class="chart" id="chart"></div>
+
+<script>
+function epley(w, r) { return w * (1 + r / 30); }
+function brzycki(w, r) { return w * (36 / (37 - r)); }
+function lander(w, r) { return w / (1.013 - 0.0267123 * r); }
+
+const tbody = document.querySelector('#planner tbody');
+const addRowBtn = document.getElementById('addRow');
+const clearBtn = document.getElementById('clearRows');
+const exportBtn = document.getElementById('exportCsv');
+const totalVolEl = document.getElementById('totalVol');
+const chartDiv = d3.select('#chart');
+
+function addRow(ex='', w='', r='', s='') {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="idx"></td>
+    <td><input value="${ex}" class="ex wide" placeholder="e.g., Overhead Press"></td>
+    <td><input type="number" inputmode="decimal" step="0.5" value="${w}" class="w"></td>
+    <td><input type="number" step="1" value="${r}" class="r"></td>
+    <td><input type="number" step="1" value="${s}" class="s"></td>
+    <td class="epley"></td>
+    <td class="brzycki"></td>
+    <td class="lander"></td>
+    <td class="vol"></td>
+    <td><button class="danger del">Delete</button></td>
+  `;
+  tbody.appendChild(tr);
+  tr.querySelectorAll('input').forEach(inp => inp.addEventListener('input', update));
+  tr.querySelector('.del').addEventListener('click', () => { tr.remove(); renumber(); update(); });
+  renumber();
+  update();
+}
+
+function renumber(){
+  [...tbody.querySelectorAll('.idx')].forEach((td, i) => td.textContent = i+1);
+}
+
+function update() {
+  const data = [];
+  let totalVol = 0;
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const ex = tr.querySelector('.ex').value.trim();
+    const w = parseFloat(tr.querySelector('.w').value) || 0;
+    const r = Math.max(1, parseInt(tr.querySelector('.r').value) || 0);
+    const s = Math.max(1, parseInt(tr.querySelector('.s').value) || 0);
+    const e = (w && r) ? epley(w, r) : 0;
+    const b = (w && r) ? brzycki(w, r) : 0;
+    const l = (w && r) ? lander(w, r) : 0;
+    const vol = w * r * s;
+    tr.querySelector('.epley').textContent = e ? e.toFixed(1) : '';
+    tr.querySelector('.brzycki').textContent = b ? b.toFixed(1) : '';
+    tr.querySelector('.lander').textContent = l ? l.toFixed(1) : '';
+    tr.querySelector('.vol').textContent = vol ? vol.toFixed(1) : '';
+    if (ex) data.push({exercise: ex, Epley: e, Brzycki: b, Lander: l});
+    totalVol += vol;
+  });
+  totalVolEl.textContent = totalVol.toFixed(1);
+  drawChart(data);
+}
+
+function drawChart(data) {
+  chartDiv.selectAll('*').remove();
+  if (!data.length) return;
+
+  const width = Math.min(900, window.innerWidth - 32);
+  const height = 420;
+  const margin = {top: 20, right: 24, bottom: 56, left: 56};
+  const svg = chartDiv.append('svg').attr('width', width).attr('height', height);
+  const x0 = d3.scaleBand().domain(data.map(d => d.exercise)).range([margin.left, width - margin.right]).paddingInner(0.2);
+  const keys = ['Epley', 'Brzycki', 'Lander'];
+  const x1 = d3.scaleBand().domain(keys).range([0, x0.bandwidth()]).padding(0.08);
+  const y = d3.scaleLinear().domain([0, d3.max(data, d => Math.max(d.Epley, d.Brzycki, d.Lander)) * 1.1]).nice().range([height - margin.bottom, margin.top]);
+  const color = d3.scaleOrdinal().domain(keys).range(['#60a5fa', '#34d399', '#f59e0b']);
+
+  svg.append('g').selectAll('g').data(data).join('g')
+    .attr('transform', d => `translate(${x0(d.exercise)},0)`) 
+    .selectAll('rect')
+    .data(d => keys.map(key => ({key, value: d[key]})))
+    .join('rect')
+    .attr('x', d => x1(d.key))
+    .attr('y', d => y(d.value))
+    .attr('width', x1.bandwidth())
+    .attr('height', d => y(0) - y(d.value))
+    .attr('fill', d => color(d.key));
+
+  svg.append('g').attr('transform', `translate(0,${height - margin.bottom})`).call(d3.axisBottom(x0)).selectAll('text').attr('transform','rotate(-24)').style('text-anchor','end');
+  svg.append('g').attr('transform', `translate(${margin.left},0)`).call(d3.axisLeft(y));
+
+  const legend = svg.append('g').attr('transform', `translate(${width - margin.right - 180}, ${margin.top})`);
+  ['#60a5fa','#34d399','#f59e0b'].forEach((c,i)=>{
+    const g = legend.append('g').attr('transform',`translate(0,${i*18})`);
+    g.append('rect').attr('width',12).attr('height',12).attr('fill',c).attr('rx',2);
+    g.append('text').attr('x',18).attr('y',10).text(keys[i]).attr('fill','#e5e7eb').attr('font-size',12);
+  });
+}
+
+function exportCsv(){
+  const rows = [['Exercise','Weight','Reps','Sets','Epley 1RM','Brzycki 1RM','Lander 1RM','Volume']];
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const ex = tr.querySelector('.ex').value;
+    const w = tr.querySelector('.w').value;
+    const r = tr.querySelector('.r').value;
+    const s = tr.querySelector('.s').value;
+    const e = tr.querySelector('.epley').textContent;
+    const b = tr.querySelector('.brzycki').textContent;
+    const l = tr.querySelector('.lander').textContent;
+    const v = tr.querySelector('.vol').textContent;
+    rows.push([ex,w,r,s,e,b,l,v]);
+  });
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'workout_plan.csv'; a.click();
+}
+
+addRowBtn.addEventListener('click', () => addRow());
+clearBtn.addEventListener('click', () => { tbody.innerHTML = ''; renumber(); update(); });
+exportBtn.addEventListener('click', exportCsv);
+window.addEventListener('resize', update);
+
+// Seed a couple example rows
+addRow('Overhead Press (Barbell)', 135, 5, 3);
+addRow('Lat Pulldown', 160, 10, 3);
+</script>
+</body>
+</html>
