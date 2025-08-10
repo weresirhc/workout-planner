@@ -26,6 +26,19 @@
     .btn-sm { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
     .spark { margin-top:6px; }
     .diag { display:none; font-size:12px; color:#94a3b8; margin-top:8px; }
+      .actions { white-space: nowrap; }
+    .btn-sm { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
+    .spark { margin-top:6px; }
+    .diag { display:none; font-size:12px; color:#94a3b8; margin-top:8px; }
+    /* NEW: mobile-friendly table wrapper so header/background spans all columns */
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* ensure the internal table has enough width to show all columns including Actions */
+    .exercise table { min-width: 820px; }
+      /* Floating action buttons */
+    .fab-wrap { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 12px; z-index: 50; }
+    .fab { width: 56px; height: 56px; border-radius: 9999px; border: none; background: #2563eb; color: #fff; font-weight: 800; font-size: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.35); cursor: pointer; }
+    .fab.secondary { background: #10b981; }
+    .fab:active { transform: translateY(1px); }
   </style>
 </head>
 <body>
@@ -40,6 +53,12 @@
 
   <div class="chart" id="chart"></div>
   <div id="diag" class="diag"></div>
+
+  <!-- Floating Action Buttons -->
+  <div class="fab-wrap">
+    <button id="fabAddSet" class="fab secondary" title="Add set" aria-label="Add set">+S</button>
+    <button id="fabAddExercise" class="fab" title="Add exercise" aria-label="Add exercise">+E</button>
+  </div>
 
 <script>
 // ------- Helpers & formulas -------
@@ -107,14 +126,33 @@ function undoLast(){
 document.getElementById('addExercise').addEventListener('click', () => addExercise());
 document.getElementById('undoBtn').addEventListener('click', undoLast);
 
+// Floating action buttons logic
+function quickAddExercise(){ addExercise(); }
+function quickAddSet(){
+  let last = exercisesDiv.querySelector('.exercise:last-of-type');
+  if (!last) { addExercise(); last = exercisesDiv.querySelector('.exercise:last-of-type'); }
+  const tbody = last.querySelector('tbody');
+  addSet(tbody);
+  const newRow = tbody.lastElementChild;
+  if (newRow) {
+    newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const wlb = newRow.querySelector('.wlb');
+    if (wlb) { wlb.focus(); if (wlb.select) wlb.select(); }
+  }
+}
+const fabEx = document.getElementById('fabAddExercise');
+if (fabEx) fabEx.addEventListener('click', quickAddExercise);
+const fabSet = document.getElementById('fabAddSet');
+if (fabSet) fabSet.addEventListener('click', quickAddSet);
+
 // ------- UI builders -------
 function addExercise(name='New Exercise') {
   pushHistory();
   const exDiv = document.createElement('div');
   exDiv.className = 'exercise';
   exDiv.innerHTML = `
-    <h2 contenteditable="true">${name}</h2>
-    <table>
+    <h2 contenteditable="true" tabindex="0">${name}</h2>
+    <div class="table-wrap"><table>
       <thead>
         <tr>
           <th>Set</th>
@@ -129,7 +167,7 @@ function addExercise(name='New Exercise') {
         </tr>
       </thead>
       <tbody></tbody>
-    </table>
+    </table></div>
     <div class="muted">Exercise Volume: <strong class="exTotal">0</strong></div>
     <div class="spark"></div>
     <div class="stack" style="margin-top:8px">
@@ -137,6 +175,20 @@ function addExercise(name='New Exercise') {
       <button class="danger removeEx" type="button">Delete Exercise</button>
     </div>`;
   exercisesDiv.appendChild(exDiv);
+
+  // scroll to and focus the new exercise title (mobile-friendly)
+  const titleEl = exDiv.querySelector('h2');
+  if (titleEl) {
+    exDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    titleEl.focus();
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(titleEl);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {}
+  }
 
   const tbody = exDiv.querySelector('tbody');
   exDiv.querySelector('.addSet').addEventListener('click', () => addSet(tbody));
@@ -381,4 +433,5 @@ addExercise('Bench Press');
 </script>
 </body>
 </html>
+
 
