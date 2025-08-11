@@ -16,8 +16,6 @@
     .exercise{ margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--surface); }
     .exercise h2{ margin: 0 0 8px; font-size: 1.2em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
     .title{ outline:none; }
-    .drag-handle{ cursor: grab; user-select: none; font-size: 20px; padding: 6px 10px; border-radius: 10px; background:var(--surface-2); border:1px solid var(--line); }
-    .drag-handle:active{ cursor: grabbing; }
 
     .table-wrap{ overflow-x: auto; -webkit-overflow-scrolling: touch; }
     table{ width: 100%; border-collapse: separate; border-spacing: 0; margin: 8px 0; min-width: 700px; }
@@ -37,7 +35,6 @@
     .quickchips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
     .chip{ padding:8px 10px; border-radius:9999px; border:1px solid var(--line); background:var(--surface-2); font-size:12px; }
 
-    .actions{ white-space: nowrap; }
     .dragging{ opacity: .6; }
 
     /* Compact/hidden modes */
@@ -55,6 +52,12 @@
     .thumbbar{ position: fixed; left: 0; right: 0; bottom: 0; background: rgba(17,24,39,.92); border-top: 1px solid var(--line); padding: 8px 12px calc(12px + env(safe-area-inset-bottom,0)); display:flex; justify-content:center; gap:8px; z-index:60; backdrop-filter: blur(8px); }
     .thumbbar .row{ display:flex; gap:8px; }
 
+    /* Modal */
+    .modal{ position: fixed; inset: 0; display:none; align-items:center; justify-content:center; background: rgba(0,0,0,.45); z-index:100; }
+    .modal.show{ display:flex; }
+    .modal .panel{ background:#111827; border:1px solid #334155; border-radius:12px; width:min(92vw,420px); padding:16px; }
+    .modal .actions-row{ display:flex; gap:8px; justify-content:flex-end; }
+
     /* Mobile tweaks */
     @media (max-width: 600px){
       table{ font-size: 13px; min-width: 520px; }
@@ -70,7 +73,7 @@
 <body>
   <h1>Workout Planner</h1>
   <div class="stack" style="margin:8px 0 12px">
-    <button id="addExercise" class="btn-sm">+ Add exercise</button>
+    <!-- Removed top + Add exercise -->
     <button id="undoBtn" class="btn-sm">Undo last</button>
     <button id="toggle1rm" class="btn-sm">Hide 1RM</button>
     <button id="toggleIncr" class="btn-sm">Hide Increments</button>
@@ -154,9 +157,13 @@ function undoLast(){ if(!undoStack.length) return; try{ writePlan(JSON.parse(und
 
 // ===== Drag helpers =====
 function makeExerciseDraggable(ex){
-  ex.setAttribute('draggable','true');
+  ex.draggable=false;
   ex.addEventListener('dragstart',function(e){ e.dataTransfer.effectAllowed='move'; ex.classList.add('dragging'); });
-  ex.addEventListener('dragend',function(){ ex.classList.remove('dragging') });
+  ex.addEventListener('dragend',function(){ ex.classList.remove('dragging'); ex.draggable=false; });
+  var h2=ex.querySelector('h2');
+  function armDrag(e){ if(e && (e.target.closest('.title')||e.target.closest('button')||e.target.closest('input'))) return; ex.draggable=true; }
+  function disarm(){ ex.draggable=false }
+  if(h2){ h2.addEventListener('mousedown',armDrag); h2.addEventListener('touchstart',armDrag,{passive:true}); ex.addEventListener('mouseup',disarm); ex.addEventListener('touchend',disarm,{passive:true}); }
 }
 function getAfter(container,y,sel){
   return $all(sel,container).reduce(function(c,ch){
@@ -168,7 +175,15 @@ function setupExerciseDropZone(){
   exercisesDiv.addEventListener('dragover',function(e){ var d=$('.exercise.dragging'); if(!d) return; e.preventDefault(); var after=getAfter(exercisesDiv,e.clientY,'.exercise:not(.dragging)'); after?exercisesDiv.insertBefore(d,after):exercisesDiv.appendChild(d) });
   exercisesDiv.addEventListener('drop',function(){ pushHistory(); update(); haptic([5,30,5]) });
 }
-function makeRowDraggable(tr){ tr.setAttribute('draggable','true'); tr.addEventListener('dragstart',function(){ tr.classList.add('dragging') }); tr.addEventListener('dragend',function(){ tr.classList.remove('dragging') }); }
+function makeRowDraggable(tr){
+  tr.draggable=false;
+  tr.addEventListener('dragstart',function(){ tr.classList.add('dragging') });
+  tr.addEventListener('dragend',function(){ tr.classList.remove('dragging'); tr.draggable=false; });
+  function arm(e){ if(e && (e.target.closest('input')||e.target.closest('button')||e.target.closest('select')||e.target.closest('textarea'))) return; if(!e.target.closest('td.setno')) return; tr.draggable=true; }
+  function dis(){ tr.draggable=false }
+  tr.addEventListener('mousedown',arm); tr.addEventListener('touchstart',arm,{passive:true});
+  tr.addEventListener('mouseup',dis); tr.addEventListener('touchend',dis,{passive:true});
+}
 function setupSetDropZone(tbody){
   tbody.addEventListener('dragover',function(e){ var d=tbody.querySelector('tr.dragging'); if(!d) return; e.preventDefault(); var after=getAfter(tbody,e.clientY,'tr:not(.dragging)'); after?tbody.insertBefore(d,after):tbody.appendChild(d) });
   tbody.addEventListener('drop',function(){ pushHistory(); update(); haptic([5,30,5]) });
@@ -179,41 +194,36 @@ function addExercise(name){
   if(name==null) name='New Exercise';
   pushHistory();
   var ex=document.createElement('div'); ex.className='exercise';
-  ex.innerHTML='\
-    <h2>\
-      <span class="title" contenteditable="true" tabindex="0">'+name+'</span>\
-      <span style="display:flex; gap:6px; align-items:center;">\
-        <button class="collapse btn-sm" title="Collapse">▾</button>\
-        <button class="drag-handle" title="Drag">☰</button>\
-      </span>\
-    </h2>\
-    <div class="table-wrap"><table>\
-      <thead><tr>\
-        <th data-short="Set">Set</th>\
-        <th data-short="Wt">Weight</th>\
-        <th data-short="Reps">Reps</th>\
-        <th class="th-epley" data-short="Epl">Epley 1RM</th>\
-        <th class="th-brzycki" data-short="Brz">Brzycki 1RM</th>\
-        <th class="th-lander" data-short="Lnd">Lander 1RM</th>\
-        <th data-short="Act">Actions</th>\
-      </tr></thead>\
-      <tbody></tbody>\
-    </table></div>\
-    <div class="quickchips"><span class="muted">Quick add lb:</span>\
-      <button class="chip add5" type="button">+5</button>\
-      <button class="chip add10" type="button">+10</button>\
-      <button class="chip add25" type="button">+25</button>\
-    </div>\
-    <div class="stack" style="margin-top:8px">\
-      <button class="addSet btn-sm" type="button">Add Set</button>\
-      <button class="removeEx btn-sm" type="button">Delete Exercise</button>\
-    </div>';
+  ex.innerHTML = `
+    <h2>
+      <span class="title" contenteditable="true" tabindex="0">${name}</span>
+      <span style="display:flex; gap:6px; align-items:center;">
+        <button class="collapse btn-sm" title="Collapse">▾</button>
+      </span>
+    </h2>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th data-short="Set">Set</th>
+        <th data-short="Wt">Weight</th>
+        <th data-short="Reps">Reps</th>
+        <th class="th-epley" data-short="Epl">Epley 1RM</th>
+        <th class="th-brzycki" data-short="Brz">Brzycki 1RM</th>
+        <th class="th-lander" data-short="Lnd">Lander 1RM</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="quickchips"><span class="muted">Quick add lb:</span>
+      <button class="chip add5" type="button">+5</button>
+      <button class="chip add10" type="button">+10</button>
+      <button class="chip add25" type="button">+25</button>
+    </div>
+    <div class="stack" style="margin-top:8px">
+      <button class="addSet btn-sm" type="button">Add Set</button>
+      <button class="removeEx btn-sm" type="button">Delete Exercise</button>
+    </div>`;
   exercisesDiv.appendChild(ex);
 
   makeExerciseDraggable(ex);
-  var handle=ex.querySelector('.drag-handle');
-  handle.addEventListener('mousedown',function(){ ex.draggable=true });
-  handle.addEventListener('touchstart',function(){ ex.draggable=true },{passive:true});
 
   var collapseBtn=ex.querySelector('.collapse');
   collapseBtn.addEventListener('click',function(){ ex.classList.toggle('collapsed'); collapseBtn.textContent=ex.classList.contains('collapsed')?'▸':'▾' });
@@ -243,29 +253,28 @@ function addExercise(name){
 function addSet(tbody,w,r){
   if(!isFinite(w)) w=0; if(!isFinite(r)) r=1;
   var tr=document.createElement('tr'); var n=tbody.children.length+1; pushHistory();
-  tr.innerHTML='\
-    <td class="setno">'+n+'<\/td>\
-    <td>\
-      <div class="wtcol">\
-        <div class="row"><span class="unit">lb<\/span>\
-          <input type="number" step="1" inputmode="numeric" pattern="[0-9]*" value="'+parseInt(w,10)+'" class="wlb">\
-        <\/div>\
-        <div class="row"><span class="unit">kg<\/span>\
-          <input type="number" step="1" inputmode="numeric" pattern="[0-9]*" value="'+Math.round(toKg(w))+'" class="wkg">\
-        <\/div>\
-      <\/div>\
-    <\/td>\
-    <td>\
-      <div class="numctl">\
-        <button class="minus rm" type="button">−<\/button>\
-        <input type="number" step="1" min="1" inputmode="numeric" pattern="[0-9]*" value="'+parseInt(r,10)+'" class="r">\
-        <button class="plus rp" type="button">+<\/button>\
-      <\/div>\
-    <\/td>\
-    <td class="epley"><\/td>\
-    <td class="brzycki"><\/td>\
-    <td class="lander"><\/td>\
-    <td class="actions"><button class="btn-sm dup" type="button">+ Set<\/button><button class="btn-sm del" type="button">🗑<\/button><\/td>';
+  tr.innerHTML = `
+    <td class="setno">${n}</td>
+    <td>
+      <div class="wtcol">
+        <div class="row"><span class="unit">lb</span>
+          <input type="number" step="1" inputmode="numeric" pattern="[0-9]*" value="${parseInt(w,10)}" class="wlb">
+        </div>
+        <div class="row"><span class="unit">kg</span>
+          <input type="number" step="1" inputmode="numeric" pattern="[0-9]*" value="${Math.round(toKg(w))}" class="wkg">
+        </div>
+      </div>
+    </td>
+    <td>
+      <div class="numctl">
+        <button class="minus rm" type="button">−</button>
+        <input type="number" step="1" min="1" inputmode="numeric" pattern="[0-9]*" value="${parseInt(r,10)}" class="r">
+        <button class="plus rp" type="button">+</button>
+      </div>
+    </td>
+    <td class="epley"></td>
+    <td class="brzycki"></td>
+    <td class="lander"></td>`;
   tbody.appendChild(tr);
 
   makeRowDraggable(tr);
@@ -286,9 +295,6 @@ function addSet(tbody,w,r){
   function repeat(btn,fn){ if(!btn) return; var t,a=false; function start(e){e.preventDefault(); if(a) return; a=true; fn(); haptic(5); t=setInterval(fn,120)} function stop(){a=false; clearInterval(t)} btn.addEventListener('mousedown',start); btn.addEventListener('touchstart',start,{passive:false}); ['mouseup','mouseleave','touchend','touchcancel'].forEach(function(ev){ btn.addEventListener(ev,stop) }) }
   repeat(rm,function(){ var v=parseInt(reps.value,10); if(!isFinite(v)) v=1; v=Math.max(1,v-1); reps.value=v; update() });
   repeat(rp,function(){ var v=parseInt(reps.value,10); if(!isFinite(v)) v=1; reps.value=v+1; update() });
-
-  var dupBtn=tr.querySelector('.dup'); if(dupBtn) dupBtn.addEventListener('click',function(){ pushHistory(); var w=parseInt((tr.querySelector('.wlb')||{}).value,10); if(!isFinite(w)) w=0; var r=parseInt(reps.value,10); if(!isFinite(r)) r=1; addSet(tbody,w,r); var nr=tbody.lastElementChild; if(nr) tbody.insertBefore(nr,tr.nextElementSibling); update(); haptic(10) });
-  var delBtn=tr.querySelector('.del'); if(delBtn) delBtn.addEventListener('click',function(){ pushHistory(); tr.remove(); update(); haptic([10,20,10]) });
 
   update();
 }
@@ -370,7 +376,7 @@ function buildCsv(){
 }
 
 // ===== DOM refs & wiring =====
-var addExBtn=$('#addExercise'), undoBtn=$('#undoBtn'), t1=$('#toggle1rm'), tInc=$('#toggleIncr');
+var undoBtn=$('#undoBtn'), t1=$('#toggle1rm'), tInc=$('#toggleIncr');
 var saveBtn=$('#saveCsv'), loadBtn=$('#loadCsv'), loadInput=$('#loadFileInput'), loadModal=$('#loadModal'), importHereBtn=$('#importHereBtn'), openSheetsBtn=$('#openSheetsBtn'), cancelLoadBtn=$('#cancelLoadBtn');
 var tbAddSet=$('#tbAddSet'), tbAddExercise=$('#tbAddExercise'), tbSave=$('#tbSave');
 
@@ -398,7 +404,6 @@ if(importHereBtn) importHereBtn.addEventListener('click',function(){ try{ writeP
 if(openSheetsBtn) openSheetsBtn.addEventListener('click',function(){ (async function(){ try{ var fileName='workout.xlsx', file; if(pendingCsvText){ try{ var wb=XLSX.read(pendingCsvText,{type:'string'}); var xbuf=XLSX.write(wb,{bookType:'xlsx',type:'array'}); file=new File([xbuf],fileName,{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}) }catch(e){ file=buildXlsxFromPlan().file } } else { file=buildXlsxFromPlan().file } if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:'Open in Google Sheets'}); haptic([5,30,5]) } else { downloadBlob(fileName,file); alert('Sharing not supported here. XLSX downloaded — open it with the Google Sheets app.') } }catch(e){ var b=buildXlsxFromPlan(); downloadBlob(b.file.name,b.file) } hideModal() })() });
 
 // Toggles
-if(addExBtn) addExBtn.addEventListener('click',function(){ addExercise(); haptic(10) });
 if(undoBtn) undoBtn.addEventListener('click',function(){ undoLast(); haptic(10) });
 var hide1rm=(G('hide1RM')||((innerWidth<480)?'1':'0'))==='1', hideInc=(G('hideInc')||'0')==='1';
 function applyHide1rm(){ document.body.classList.toggle('hide-1rm',hide1rm); var t=hide1rm?'Show 1RM':'Hide 1RM'; if(t1) t1.textContent=t }
@@ -407,10 +412,22 @@ function toggleHide1rm(){ hide1rm=!hide1rm; S('hide1RM',hide1rm?'1':'0'); applyH
 function toggleHideInc(){ hideInc=!hideInc; S('hideInc',hideInc?'1':'0'); applyHideInc() }
 applyHide1rm(); applyHideInc();
 if(t1) t1.addEventListener('click',toggleHide1rm);
+if(tInc) tInc.addEventListener('click',toggleHideInc);
 
 if(tbAddSet) tbAddSet.addEventListener('click',function(){ var last=$('.exercise:last-of-type'); if(!last){ addExercise(); last=$('.exercise:last-of-type'); } var tb=last.querySelector('tbody'); addSet(tb); var row=tb && tb.lastElementChild; if(row && row.scrollIntoView) row.scrollIntoView({behavior:'smooth',block:'center'}) });
 if(tbAddExercise) tbAddExercise.addEventListener('click',function(){ addExercise() });
 if(tbSave) tbSave.addEventListener('click',function(){ var out=buildCsv(); shareCsv(out.filename,out.csv) });
+
+// ===== Tests (console only) =====
+(function(){ try{
+  function eq(a,b,e){ if(e==null) e=1e-6; return Math.abs(a-b)<e }
+  console.assert(eq(toLb(100*KG_PER_LB),100),'toLb∘toKg');
+  console.assert(eq(toKg(100*LB_PER_KG),100),'toKg∘toLb');
+  var w=225,r=10; console.assert(eq(epley(w,r),300),'Epley 225x10'); console.assert(eq(brzycki(w,r),300),'Brzycki 225x10'); var L=lander(w,r); console.assert(L>301 && L<302.5,'Lander 225x10');
+  var sample='Date,Exercise,Set,Weight_lb,Weight_kg,Reps\n2024-01-01,Bench,1,225,102,10\n2024-01-01,Bench,2,230,104,8';
+  var plan=parseCsv(sample); console.assert(Array.isArray(plan) && plan[0] && plan[0].sets.length===2,'parseCsv → 2 sets');
+  console.log('Workout Planner: tests passed');
+}catch(e){ console.warn('Workout Planner: tests failed', e) } })();
 
 // ===== Boot =====
 (function boot(){ try{ var raw=G('planV1'); if(raw){ var plan=JSON.parse(raw); if(Array.isArray(plan) && plan.length){ writePlan(plan); return } } }catch(e){} addExercise('Bench Press') })();
@@ -418,6 +435,7 @@ setupExerciseDropZone();
 </script>
 </body>
 </html>
+
 
 
 
