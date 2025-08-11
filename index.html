@@ -18,24 +18,36 @@
     .title{ outline:none; }
 
     .table-wrap{ overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    table{ width: 100%; border-collapse: separate; border-spacing: 0; margin: 8px 0; min-width: 700px; }
+    table{ width: 100%; border-collapse: separate; border-spacing: 0; margin: 8px 0; min-width: 0; }
     th, td{ padding: 10px; border-bottom: 1px solid var(--line); position: relative; }
     th{ text-align: left; background: var(--surface-2); color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.02em; position: sticky; top: 0; z-index: 5; box-shadow: 0 1px 0 var(--line), 0 2px 8px rgba(0,0,0,.18); }
 
     /* Weight column with stacked lb / kg inputs */
-    .wtcol{ display:flex; flex-direction:column; gap:6px; min-width: 150px; }
+    .wtcol{ display:flex; flex-direction:column; gap:6px; min-width: 0; }
     .wtcol .row{ display:flex; align-items:center; gap:8px; }
-    .wtcol .unit{ color:var(--muted); font-size:12px; width:28px; text-transform:uppercase; letter-spacing:.04em; }
+    .wtcol .unit{ color:var(--muted); font-size:12px; width:28px; text-transform:uppercase; letter-spacing:.04em; flex:0 0 auto; }
+    .wtcol .row input{ width:6.5ch; max-width:7ch; height: 40px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; font-size:16px; }
 
     /* Numeric control only used for REPS now */
     .numctl{ display:flex; align-items:center; gap:6px; }
-    .numctl input{ width: 84px; height: 44px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; font-size:16px; }
-    .numctl button{ width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-size:20px; font-weight:700; }
+    .numctl input{ width:6.5ch; max-width:7ch; height: 40px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; font-size:16px; }
+    .numctl button{ width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-size:20px; font-weight:700; }
+
+    /* Hide browser spinners for cleaner, narrower inputs */
+    input[type=number]{ -moz-appearance: textfield; }
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button{ -webkit-appearance: none; margin: 0; }
 
     .quickchips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
-    .chip{ padding:8px 10px; border-radius:9999px; border:1px solid var(--line); background:var(--surface-2); font-size:12px; }
+    .chip{ padding:8px 10px; border-radius:9999px; border:1px solid var(--line); background: var(--surface-2); font-size:12px; }
 
     .dragging{ opacity: .6; }
+
+    /* Collapsed state */
+    .exercise.collapsed .table-wrap,
+    .exercise.collapsed .quickchips,
+    .exercise.collapsed .stack{ display:none; }
+    .exercise.collapsed{ padding-bottom: 8px; }
 
     /* Compact/hidden modes */
     body.hide-1rm .exercise td.epley,
@@ -44,9 +56,20 @@
     body.hide-1rm .exercise th.th-epley,
     body.hide-1rm .exercise th.th-brzycki,
     body.hide-1rm .exercise th.th-lander{ display:none }
-    body.hide-1rm .exercise table{ min-width: 500px; }
+    body.hide-1rm .exercise table{ min-width: 0; }
     body.hide-incr .numctl button{ display:none }
     body.hide-incr .quickchips{ display:none }
+
+    /* Force-hide 1RM columns on very small screens to avoid horizontal scroll */
+    @media (max-width: 430px){
+      .exercise td.epley,
+      .exercise td.brzycki,
+      .exercise td.lander,
+      .exercise th.th-epley,
+      .exercise th.th-brzycki,
+      .exercise th.th-lander{ display:none !important; }
+      table{ min-width: 0; }
+    }
 
     /* Bottom toolbar */
     .thumbbar{ position: fixed; left: 0; right: 0; bottom: 0; background: rgba(17,24,39,.92); border-top: 1px solid var(--line); padding: 8px 12px calc(12px + env(safe-area-inset-bottom,0)); display:flex; justify-content:center; gap:8px; z-index:60; backdrop-filter: blur(8px); }
@@ -60,11 +83,11 @@
 
     /* Mobile tweaks */
     @media (max-width: 600px){
-      table{ font-size: 13px; min-width: 520px; }
+      table{ font-size: 13px; min-width: 0; }
       th, td{ padding: 6px 4px; }
-      .wtcol{ min-width: 120px; gap:4px }
+      .wtcol{ min-width: 0; gap:4px }
       .wtcol .row input{ height: 36px; }
-      .numctl input{ width:72px; height:38px; font-size:15px }
+      .numctl input{ height:38px; font-size:15px }
       .numctl button{ width:34px; height:34px; font-size:18px }
       .btn-sm{ padding:8px 10px; min-width:38px; min-height:38px; font-size:13px }
     }
@@ -435,6 +458,7 @@ setupExerciseDropZone();
 </script>
 </body>
 </html>
+
 
 
 
